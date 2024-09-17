@@ -1,0 +1,42 @@
+---
+title: "Week4"
+author: "Byron Huang"
+date: "2024-09-17"
+output: 
+  html_document:
+    theme: cerulean
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(sf)
+library(leaflet)
+```
+
+## R Markdown
+
+This is an R Markdown document.
+
+Sample map
+
+```{r}
+sites <- st_read("data/Sites_v6.geojson")
+
+leaflet(sites) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  setView(lng = 103.950820, lat = 1.376144, zoom = 15) %>%  # Set center and zoom level
+  addPolygons(
+    color = "#ff7176",  # Border color for the polygons
+    weight = 1,        # Border thickness
+    opacity = 1,       # Border opacity
+    fillColor = "#ff7176", # Fill color for the polygons
+    fillOpacity = 0.5,  # Fill opacity
+    popup = ~paste0(
+      "<b>Name:</b> ", Project_Name, "<br>",
+      "<b>Units:</b> ", Units, "<br>"
+      # Add as many attributes as necessary
+    )
+  )
+```
