@@ -1,5 +1,5 @@
 ---
-title: "Week4"
+title: "Week 4 Sandbox"
 author: "Byron Huang"
 date: "2024-09-17"
 output: 
@@ -13,13 +13,12 @@ knitr::opts_chunk$set(echo = TRUE)
 
 library(sf)
 library(leaflet)
+library(ggplot2)
 ```
 
-## R Markdown
+## Map
 
-This is an R Markdown document.
-
-Sample map
+Sample map:
 
 ```{r}
 sites <- st_read("data/Sites_v6.geojson")
@@ -40,3 +39,5 @@ leaflet(sites) %>%
     )
   )
 ```
+
+## ggplot
