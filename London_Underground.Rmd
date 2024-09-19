@@ -2,7 +2,11 @@
 title: "How has commuting behaviour changed in Central London following the pandemic?"
 author: "Byron Huang"
 date: '`r Sys.Date()`'
-output: html_document
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
 ---
 
 ```{r setup, include=FALSE}
