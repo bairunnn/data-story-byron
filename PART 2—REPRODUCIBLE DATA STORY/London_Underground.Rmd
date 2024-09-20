@@ -1,0 +1,374 @@
+---
+title: "How has commuting behaviour changed in Central London following the pandemic?"
+author: "Byron Huang"
+date: '`r Sys.Date()`'
+output:
+  rmdformats::readthedown: default
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(scales)
+library(gridExtra)
+library(cowplot)
+library(ggrepel)
+```
+
+# Will working from home stick in the post-pandemic period? A brief study on travel behaviour in London's financial districts.
+
+This is a `draft`
+
+## Data import and cleaning
+
+```{r import_datasets}
+data2021 <- read.csv(file.path("data", "tfl2021data.csv"))
+data2022 <- read.csv(file.path("data", "tfl2022data.csv"))
+data2023 <- read.csv(file.path("data", "tfl2023data.csv"))
+```
+
+```{r remove_zeros}
+remove_zero_annualised <- function(data) {
+  data_clean <- data[data$ANNUALISED_INANDOUT != 0, ]
+  return(data_clean)
+}
+
+data2021_clean <- remove_zero_annualised(data2021)
+data2022_clean <- remove_zero_annualised(data2022)
+data2023_clean <- remove_zero_annualised(data2023)
+```
+
+```{r fix_2023_dashes}
+data2023_clean <- data2023_clean %>%
+  mutate(across(-c(STATION, LINE), as.numeric))
+
+data2023_clean <- na.omit(data2023_clean)
+```
+
+Now, select stations located within the "City of London / The Square Mile"—London's primary financial district. These stations are: **Aldgate, Bank, Monument, Barbican, Blackfriars, Cannon Street, Chancery Lane, Liverpool Street, Mansion House, Moorgate, St. Paul's, Aldgate East, Farringdon, Temple, Tower Hill**.
+
+```{r square_mile}
+sqm_stations <- c("Aldgate", "Bank", "Monument", "Barbican", "Blackfriars", 
+              "Cannon Street", "Chancery Lane", "Liverpool Street", 
+              "Mansion House", "Moorgate", "St. Paul's", 
+              "Aldgate East", "Farringdon", "Temple", "Tower Hill")
+
+data_2021_sqm <- data2021_clean %>%
+  filter(str_detect(STATION, paste(sqm_stations, collapse = "|")))
+
+data_2022_sqm <- data2022_clean %>%
+  filter(str_detect(STATION, paste(sqm_stations, collapse = "|")))
+
+data_2023_sqm <- data2023_clean %>%
+  filter(str_detect(STATION, paste(sqm_stations, collapse = "|")))
+```
+
+```{r fix_2021_sqm}
+new_record <- data_2021_sqm %>%
+  filter(STATION == "Bank and Monument") %>%
+  summarise(across(-c(LINE, STATION), sum, na.rm = TRUE)) %>%
+  mutate(LINE = "LU/DLR", STATION = "Bank and Monument")
+
+data_2021_sqm <- bind_rows(data_2021_sqm, new_record)
+
+data_2021_sqm <- data_2021_sqm %>%
+  filter(!(STATION == "Bank and Monument" & LINE %in% c("LU", "DLR")))
+
+new_record_liverpool <- data_2021_sqm %>%
+  filter((LINE == "LU" & STATION == "Liverpool Street LU") |
+         (LINE == "EZL" & STATION == "Liverpool Street NR")) %>%
+  summarise(across(-c(LINE, STATION), sum, na.rm = TRUE)) %>%
+  mutate(LINE = "LU/EZL", STATION = "Liverpool Street")
+
+# Remove the original records
+data_2021_sqm <- data_2021_sqm %>%
+  filter(!(STATION == "Liverpool Street LU" & LINE == "LU" |
+            STATION == "Liverpool Street NR" & LINE == "EZL"))
+
+# Bind the new record to the original data frame
+data_2021_sqm <- bind_rows(data_2021_sqm, new_record_liverpool)
+```
+
+Now select stations located within Canary Wharf—London's second financial district. These stations are: **Canary Wharf, Heron Quays, West India Quay**.
+
+```{r canary_wharf}
+wharf_stations <- c("Canary Wharf", "Heron Quays", "West India Quay")
+
+data_2021_wharf <- data2021_clean %>%
+  filter(str_detect(STATION, paste(wharf_stations, collapse = "|")))
+
+data_2022_wharf <- data2022_clean %>%
+  filter(str_detect(STATION, paste(wharf_stations, collapse = "|")))
+
+data_2023_wharf <- data2023_clean %>%
+  filter(str_detect(STATION, paste(wharf_stations, collapse = "|")))
+```
+
+## Data analysis
+
+Within the square mile stations, we first calculate the total number of tap ins and tap outs, then compare across the two years (2022 vs 2023).
+
+```{r summary_sqm}
+summary_2022_sqm <- data_2022_sqm %>%
+  select(-LINE, -STATION) %>%
+  summarise(across(everything(), sum, na.rm = TRUE)) %>%
+  mutate(year = 2022)
+
+summary_2023_sqm <- data_2023_sqm %>%
+  select(-LINE, -STATION) %>%
+  summarise(across(everything(), sum, na.rm = TRUE)) %>%
+  mutate(year = 2023)
+
+summary_sqm <- bind_rows(summary_2022_sqm, summary_2023_sqm)
+```
+
+And likewise for Canary Wharf:
+
+```{r}
+summary_2022_wharf <- data_2022_wharf %>%
+  select(-LINE, -STATION) %>%
+  summarise(across(everything(), sum, na.rm = TRUE)) %>%
+  mutate(year = 2022)
+
+summary_2023_wharf <- data_2023_wharf %>%
+  select(-LINE, -STATION) %>%
+  summarise(across(everything(), sum, na.rm = TRUE)) %>%
+  mutate(year = 2023)
+
+summary_wharf <- bind_rows(summary_2022_wharf, summary_2023_wharf)
+```
+
+## Data visualisations
+
+Let's now see the changes in the tap in and out records for the financial districts.
+
+```{r travel_across_week_sqm}
+summary_long_sqm <- summary_sqm %>%
+  pivot_longer(cols = starts_with("IN_"), 
+               names_to = "day_of_week", 
+               values_to = "value") %>%
+  mutate(day_of_week = factor(day_of_week, 
+                              levels = c("IN_MON", "IN_TUE_TO_THU", "IN_FRI", "IN_SAT", "IN_SUN")))
+
+ggplot(summary_long_sqm, aes(x = day_of_week, y = value, color = factor(year), group = year)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Tap-in records across the week (City of London financial centre)",
+       x = "Day of the Week",
+       y = "Value",
+       color = "Year") +
+  theme_minimal()
+```
+
+```{r travel_across_week_wharf}
+
+summary_long_wharf <- summary_wharf %>%
+  pivot_longer(cols = starts_with("IN_"), 
+               names_to = "day_of_week", 
+               values_to = "value") %>%
+  mutate(day_of_week = factor(day_of_week, 
+                              levels = c("IN_MON", "IN_TUE_TO_THU", "IN_FRI", "IN_SAT", "IN_SUN")))
+
+ggplot(summary_long_wharf, aes(x = day_of_week, y = value, color = factor(year), group = year)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Tap-in records across the week (Canary Wharf financial centre)",
+       x = "Day of the Week",
+       y = "Value",
+       color = "Year") +
+  theme_minimal()
+```
+
+The general pattern seems to be stable across the two years, but let's delve deeper into the weekdays.
+
+```{r}
+summary_sqm <- summary_sqm %>%
+  mutate(
+    mon_over_tt = (IN_MON / IN_TUE_TO_THU) - 1,
+    fri_over_tt = (IN_FRI / IN_TUE_TO_THU) - 1
+  )
+
+summary_wharf <- summary_wharf %>%
+  mutate(
+    mon_over_tt = (IN_MON / IN_TUE_TO_THU) - 1,
+    fri_over_tt = (IN_FRI / IN_TUE_TO_THU) - 1
+  )
+```
+
+See if we can visualise it...
+
+```{r}
+plot_mon_sqm <-
+  ggplot(summary_sqm, aes(x = factor(year), y = mon_over_tt * 100, fill = factor(year))) +
+  geom_bar(stat = "identity", width = 0.4) +
+  geom_text(aes(label = sprintf("%.1f%%", mon_over_tt * 100)), 
+            vjust = -0.5, color = "black", size = 3) +
+  scale_y_continuous(labels = label_percent(scale = 1)) +
+  labs(title = "Monday tap-in volume relative to Tuesday-Thursday \n(City of London financial centre)",
+       x = "Year",
+       y = "Mon Over TT (%)",
+       fill = "Year") +
+  theme_minimal()
+
+plot_mon_sqm
+```
+
+Fridays:
+
+```{r}
+plot_fri_sqm <-
+ggplot(summary_sqm, aes(x = factor(year), y = fri_over_tt * 100, fill = factor(year))) +
+  geom_bar(stat = "identity", width = 0.4) +  # Adjust width for narrower bars
+  geom_text(aes(label = sprintf("%.1f%%", fri_over_tt * 100)), 
+            vjust = -0.5, color = "black", size = 3) +
+  scale_y_continuous(labels = label_percent(scale = 1)) +
+  labs(title = "Friday tap-in volume relative to Tuesday-Thursday \n(City of London financial centre)",
+       x = "Year",
+       y = "Fri Over TT (%)",
+       fill = "Year") +
+  theme_minimal()
+
+plot_fri_sqm
+```
+
+```{r}
+grid.arrange(plot_mon_sqm, plot_fri_sqm, ncol = 2)
+```
+
+And for Canary Wharf:
+
+```{r}
+plot_mon_wharf <-
+  ggplot(summary_wharf, aes(x = factor(year), y = mon_over_tt * 100, fill = factor(year))) +
+  geom_bar(stat = "identity", width = 0.4) +
+  geom_text(aes(label = sprintf("%.1f%%", mon_over_tt * 100)), 
+            vjust = -0.5, color = "black", size = 3) +
+  scale_y_continuous(labels = label_percent(scale = 1)) +
+  labs(title = "Monday tap-in volume relative to Tuesday-Thursday \n(Canary Wharf)",
+       x = "Year",
+       y = "Mon Over TT (%)",
+       fill = "Year") +
+  theme_minimal()
+
+plot_fri_wharf <-
+ggplot(summary_wharf, aes(x = factor(year), y = fri_over_tt * 100, fill = factor(year))) +
+  geom_bar(stat = "identity", width = 0.4) +  # Adjust width for narrower bars
+  geom_text(aes(label = sprintf("%.1f%%", fri_over_tt * 100)), 
+            vjust = -0.5, color = "black", size = 3) +
+  scale_y_continuous(labels = label_percent(scale = 1)) +
+  labs(title = "Friday tap-in volume relative to Tuesday-Thursday \n(Canary Wharf)",
+       x = "Year",
+       y = "Fri Over TT (%)",
+       fill = "Year") +
+  theme_minimal()
+
+grid.arrange(plot_mon_wharf, plot_fri_wharf, ncol = 2)
+```
+
+Slope graph may be useful too:
+
+```{r}
+plot_data <- summary_sqm %>%
+  select(year, mon_over_tt, fri_over_tt) %>%
+  pivot_longer(cols = starts_with("mon_over_tt") | starts_with("fri_over_tt"),
+               names_to = "variable",
+               values_to = "value") %>%
+  mutate(year = as.factor(year))
+
+ggplot(data = plot_data, aes(x = year, y = value * 100, group = variable, color = variable)) +
+  geom_line(size = 2) +
+  geom_point(size = 4) +
+  geom_text(aes(label = sprintf("%.1f%%", value * 100)), 
+            vjust = -0.5, fontface = "bold", size = 4) +
+  # Add vertical lines for each year
+  geom_vline(xintercept = 1:2, linetype = "dashed", color = "grey") +
+  # Add vertical axes for each year
+  geom_text(aes(x = year, y = -10, label = year), 
+            size = 6, fontface = "bold", color = "black", vjust = 1.5) +
+  scale_x_discrete(position = "top") +
+  scale_y_continuous(labels = label_percent(scale = 1), limits = c(-30, -20)) +
+  theme_bw(base_size = 18) +
+  theme(legend.position = "none",
+        panel.border = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.title.x = element_blank(),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor.y = element_blank(),
+        panel.grid.major.x = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text.x.top = element_text(size = 12),
+        plot.title = element_text(size = 14, face = "bold", hjust = 0.5)) +
+  labs(
+    title = "Mon & Fri tap-in volumes (relative to Tue/Wed/Thu)",
+    caption = "Data source: Your data source"
+  )
+```
+
+## Overall ridership
+
+Compare financial districts' ridership (growth) with overall ridership
+
+```{r}
+mean_2022 <- mean(data2022_clean$ANNUALISED_INANDOUT, na.rm = TRUE)
+mean_2023 <- mean(data2023_clean$ANNUALISED_INANDOUT, na.rm = TRUE)
+
+network_ridership_summary <- data.frame(
+  year = c(2022, 2023),
+  mean_ANNUALISED_INANDOUT = c(mean_2022, mean_2023)
+)
+
+cat("Overall % increase in ridership in the network from 2022 to 2023: ")
+print(mean_2023 / mean_2022 - 1)
+```
+
+```{r}
+cat("% Increase in ridership for sqm from 2022 to 2023: ")
+print(subset(summary_sqm, year == 2023)$ANNUALISED_INANDOUT
+      / subset(summary_sqm, year == 2022)$ANNUALISED_INANDOUT - 1)
+```
+
+```{r}
+cat("% Increase in ridership for Canary Wharf from 2022 to 2023: ")
+print(subset(summary_wharf, year == 2023)$ANNUALISED_INANDOUT
+      / subset(summary_wharf, year == 2022)$ANNUALISED_INANDOUT - 1)
+```
+
+This shows that ridership growth (recovery) of stations in the two financial districts has outpaced that of London overall.
+
+```{r}
+ridership_summary <- data.frame(
+  year = c("London overall", "City of London (The Square Mile)", "Canary Wharf"),
+  pct_increase = c(
+    (mean_2023 / mean_2022 - 1), 
+    (subset(summary_sqm, year == 2023)$ANNUALISED_INANDOUT
+      / subset(summary_sqm, year == 2022)$ANNUALISED_INANDOUT - 1), 
+    (subset(summary_wharf, year == 2023)$ANNUALISED_INANDOUT
+      / subset(summary_wharf, year == 2022)$ANNUALISED_INANDOUT - 1))
+)
+```
+
+```{r plott}
+#| fig.width = 10, fig.height = 4
+
+ggplot(ridership_summary, aes(x = reorder(year, pct_increase), y = pct_increase, fill = year)) +
+  geom_bar(stat = "identity", width = 0.3) +
+  coord_flip() +
+  geom_text(aes(label = scales::percent(pct_increase, accuracy = 0.1)), 
+            hjust = 1.2, size = 3) +
+  labs(x = NULL, 
+       y = "Percentage increase in ridership", 
+       title = "Increase in ridership from 2022 to 2023",
+       fill = "Geography") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold")) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 0.1)) +
+  scale_fill_manual(values = c("#2E86AB", "#F18F01", "#9F2042"))
+
+```
