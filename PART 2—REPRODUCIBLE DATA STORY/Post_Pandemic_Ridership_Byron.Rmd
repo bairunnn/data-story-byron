@@ -18,13 +18,16 @@ output:
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
 
-# Libraries to load
-library(tidyverse)
-library(ggrepel)
-library(scales)
-library(gridExtra)
-library(kableExtra)
-library(pandoc)
+library(groundhog)
+groundhog.day = "2024-09-11"
+
+# Other libraries to load
+groundhog.library("tidyverse", groundhog.day)
+groundhog.library("ggrepel", groundhog.day)
+groundhog.library("scales", groundhog.day)
+groundhog.library("gridExtra", groundhog.day)
+groundhog.library("kableExtra", groundhog.day)
+groundhog.library("pandoc", groundhog.day)
 ```
 
 ## Introduction
