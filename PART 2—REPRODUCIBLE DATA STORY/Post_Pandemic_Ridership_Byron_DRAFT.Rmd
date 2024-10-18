@@ -1,0 +1,584 @@
+---
+title: "How has Tube ridership in Central London changed following the pandemic?"
+author: "Byron Huang (bairun@upenn.edu)"
+date: '`r Sys.Date()`'
+bibliography: references.bib
+biblio-style: "apalike"
+nocite: |
+  @*
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    highlight: tango
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+
+library(groundhog)
+groundhog.day = "2024-09-11"
+
+# Other libraries to load
+groundhog.library("tidyverse", groundhog.day)
+groundhog.library("ggrepel", groundhog.day)
+groundhog.library("scales", groundhog.day)
+groundhog.library("gridExtra", groundhog.day)
+groundhog.library("kableExtra", groundhog.day)
+groundhog.library("pandoc", groundhog.day)
+```
+
+## Introduction
+
+![](data/tfl.png){width="106"}
+
+The London Underground network (colloquially "The Tube") is the world's oldest mass rapid transit system, moving **over 7.6 million passengers each day**.
+
+Since the onset of the pandemic, travel patterns have shifted considerably, a large part driven by the **widespread adoption of remote or flexible work**. For instance in the UK, survey data shows that the post-pandemic frequency of remote work is likely to remain at two days per week, with Tuesdays to Thursdays being the most popular days for returning to the office (Anable et al., 2022).
+
+For policymakers and public transit operators, it may be useful to study how commuting behaviour is changing in the current post-pandemic period, with potential benefits such as optimising manpower and asset usage, flexible fare structures and packages and demand forecasting. This forms the main motivation for this brief exploratory study using annual ridership statistics of the London Underground system, with a focus on London's two Central Business Districts (CBDs).
+
+## Key Highlights
+
+-   In the past two years, **ridership in Central London has recovered more quickly** than London overall.
+
+-   **Remote working conditions continue to influence commutes to Central London**, with up to 23.9% less travel on Mondays and Fridays compared to other weekdays.
+
+-   **Weekend travel to the City of London (the main CBD) has recovered at a strong pace, comparable to the increase in workers returning to the office**. However, weekend travel to Canary Wharf (the second CBD) is stable across the two years, likely due to the dominance of offices in the land use mix of the area.
+
+-   **Fridays** have replaced Mondays as the most popular day for remote working.
+
+-   Remote working is **less prevalent in Canary Wharf** compared to the City.
+
+## Data source
+
+**Annual ridership data** is available in Transport for London (TfL)'s [open data portal](https://crowding.data.tfl.gov.uk/). In London, users of the Underground tap in and out at each station, and the average number of entries and exits is available for each station. For the years 2022 and 2023, TfL has released the numbers of entries and exits for Mondays, Tuesdays to Thursdays (taking the average of the three days), Fridays, Saturdays and Sundays, allowing analysts to examine the extent of remote work on travel behaviour.
+
+## Data cleaning and analysis
+
+Ridership data is released annually by TfL in the `.xlsx` format and can be easily cleaned and processed. As such, this study is scalable as data availability improves, particularly for future analysts who would like to study the medium-run effects of remote work on travel behaviour.
+
+For the present narrative, the years 2022-23 are chosen as Lockdown had only been lifted in July 2021, allowing some buffer time for travel patterns to stabilise.
+
+The R chunk below imports and cleans the raw data (converted to the `.csv` format in Excel—a pre-requisite step for future studies with newer data).
+
+```{r import_data}
+# Import the .csv files converted from the .xlsx files from TfL
+data2022 <- read.csv(file.path("data", "tfl2022data.csv"))
+data2023 <- read.csv(file.path("data", "tfl2023data.csv"))
+
+# Remove duplicate stations or non-operational stations with custom function
+remove_zero_annualised <- function(data) {
+  data_clean <- data[data$ANNUALISED_INANDOUT != 0, ]
+  return(data_clean)
+}
+
+data2022_clean <- remove_zero_annualised(data2022)
+data2023_clean <- remove_zero_annualised(data2023)
+
+data2022 <- NULL
+data2023 <- NULL
+```
+
+Note that rather than `0` or `NA`, TfL may use "---" (in character format) to denote empty / zero data. The code below fixes this issue which applies to the 2023 dataset downloaded.
+
+```{r removing_NAs}
+data2023_clean <- data2023_clean %>%
+  mutate(across(-c(STATION, LINE), as.numeric))
+
+data2023_clean <- na.omit(data2023_clean)
+```
+
+### Selecting our target locations—the business districts
+
+While London is a polycentric city, two major employment clusters exist—the **City of London / Square Mile** (the [main](https://en.wikipedia.org/wiki/City_of_London) Central Business District) and Canary Wharf (the [second](https://en.wikipedia.org/wiki/Canary_Wharf) Central Business District; an edge city development built up since the 1990s). To examine commuting patterns in these two locations, subsets are created from the downloaded datasets containing only stations located within each district.
+
+```{r subsetting_stations}
+# Selecting stations within the City of London / Square Mile
+sqm_stations <- c("Aldgate", "Bank", "Monument", "Barbican", "Blackfriars",
+              "Cannon Street", "Chancery Lane", "Liverpool Street", 
+              "Mansion House", "Moorgate", "St. Paul's", 
+              "Aldgate East", "Farringdon", "Temple", "Tower Hill")
+
+data_2022_sqm <- data2022_clean %>%
+  filter(str_detect(STATION, paste(sqm_stations, collapse = "|")))
+
+data_2023_sqm <- data2023_clean %>%
+  filter(str_detect(STATION, paste(sqm_stations, collapse = "|")))
+
+# Selecting stations within Canary Wharf
+wharf_stations <- c("Canary Wharf", "Heron Quays", "West India Quay")
+
+data_2022_wharf <- data2022_clean %>%
+  filter(str_detect(STATION, paste(wharf_stations, collapse = "|")))
+
+data_2023_wharf <- data2023_clean %>%
+  filter(str_detect(STATION, paste(wharf_stations, collapse = "|")))
+
+```
+
+### Aggregating records to the district level
+
+Next, for all of the stations within each business district, the total number of entries and exits are calculated and stored in a new dataframe, which can be viewed below:
+
+```{r aggregating_by_district}
+# Aggregating stations within the City of London / Square Mile 
+summary_2022_sqm <- data_2022_sqm %>%
+  select(-LINE, -STATION) %>%
+  summarise(across(everything(), sum, na.rm = TRUE)) %>%
+  mutate(Year = 2022)
+
+summary_2023_sqm <- data_2023_sqm %>%
+  select(-LINE, -STATION) %>%
+  summarise(across(everything(), sum, na.rm = TRUE)) %>%
+  mutate(Year = 2023)
+
+summary_sqm <- bind_rows(summary_2022_sqm, summary_2023_sqm)
+summary_sqm <- summary_sqm[, c("Year", setdiff(names(summary_sqm), "Year"))]
+rm(list = c("summary_2022_sqm", "summary_2023_sqm"))
+
+# Aggregating stations within Canary Wharf 
+summary_2022_wharf <- data_2022_wharf %>%
+  select(-LINE, -STATION) %>%
+  summarise(across(everything(), sum, na.rm = TRUE)) %>%
+  mutate(Year = 2022)
+
+summary_2023_wharf <- data_2023_wharf %>%
+  select(-LINE, -STATION) %>%
+  summarise(across(everything(), sum, na.rm = TRUE)) %>%
+  mutate(Year = 2023)
+
+summary_wharf <- bind_rows(summary_2022_wharf, summary_2023_wharf)
+summary_wharf <- summary_wharf[, c("Year", setdiff(names(summary_wharf), "Year"))]
+rm(list = c("summary_2022_wharf", "summary_2023_wharf"))
+
+# Set up tables for display
+summary_sqm_table <- kable(summary_sqm, format = "html", caption = "Summary SQM Data") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+
+summary_wharf_table <- kable(summary_wharf, format = "html", caption = "Summary Wharf Data") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+
+```
+
+Aggregate statistics for the City of London (Square Mile)
+
+```{r summary_sqm}
+summary_sqm_table
+```
+
+Aggregate statistics for the Canary Wharf (Square Mile)
+
+```{r summary_wharf}
+summary_wharf_table
+```
+
+With district-level statistics calculated, we can now explore the main findings from the data available.
+
+## Finding #1: Ridership recovery in both central business districts have outpaced that of London as a whole
+
+The recovery of Tube ridership in London is not uniform. Fig. 1 below illustrates the percentage increase in overall ridership in the City and in Canary Wharf compared to London overall.
+
+```{r fig1_overall_recovery}
+# First create a summary table comparing the three geographies
+ridership_summary <- data.frame(
+  year = c("London overall", "City of London (The Square Mile)", "Canary Wharf"),
+  pct_increase = c(
+    (mean(data2023_clean$ANNUALISED_INANDOUT, na.rm = TRUE) 
+      / mean(data2022_clean$ANNUALISED_INANDOUT, na.rm = TRUE) - 1), 
+    (subset(summary_sqm, Year == 2023)$ANNUALISED_INANDOUT
+      / subset(summary_sqm, Year == 2022)$ANNUALISED_INANDOUT - 1), 
+    (subset(summary_wharf, Year == 2023)$ANNUALISED_INANDOUT
+      / subset(summary_wharf, Year == 2022)$ANNUALISED_INANDOUT - 1))
+)
+
+year_order <- c("London overall", "Canary Wharf", "City of London (The Square Mile)")
+
+ggplot(ridership_summary, aes(
+  x = factor(year, levels = year_order), 
+  y = pct_increase, 
+  fill = factor(year, levels = rev(year_order))
+  )) +
+  geom_bar(stat = "identity", width = 0.3) +
+  coord_flip() +
+  geom_text(aes(label = scales::percent(pct_increase, accuracy = 0.1)), 
+            hjust = 1.2, size = 3) +
+  labs(x = NULL, 
+       y = "Percentage increase in ridership", 
+       title = "Fig. 1: Increase in Tube ridership from 2022 to 2023",
+       subtitle = "Comparing City of London and Canary Wharf with London overall",
+       fill = "Geography") +
+  theme_minimal() +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 0.1)) +
+  scale_fill_manual(values = c("#2E86AB", "#F18F01", "#9F2042"))
+
+```
+
+This shows that the **recovery of ridership in the two financial districts has outpaced that of London overall**—a possible indication of quicker recovery in transit use for work (commuting) compared to leisure travel. Recovery in the traditional CBD (the City of London) has also been quicker than that in Canary Wharf.
+
+## Finding #2: Remote work continues to influence intra-week commuting patterns
+
+Towards the end of the pandemic, Barrero et al. (2021) posited that working from home will stick—with a sizable portion of the workweek supplied remotely (from home, or from a third location). Ridership data in Central London confirms this trend, with a **noticeable dip in Tube travel demand on Mondays and Fridays** compared to other weekdays, even after two years following the lifting of pandemic restrictions. Fig. 2 and 3 below illustrate the intra-week travel demand in the two CBDs.
+
+```{r intra_week_sqm}
+summary_long_sqm <- summary_sqm %>%
+  pivot_longer(cols = starts_with("IN_"), 
+               names_to = "day_of_week", 
+               values_to = "value") %>%
+  mutate(day_of_week = factor(day_of_week, 
+                              levels = c("IN_MON", "IN_TUE_TO_THU", "IN_FRI", "IN_SAT", "IN_SUN")))
+
+ggplot(summary_long_sqm, aes(
+  x = day_of_week, 
+  y = value, 
+  color = factor(Year), 
+  group = Year)) +
+  geom_line(size = 1.5) +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("#9F2042", "#2E86AB")) +
+  labs(
+    title = "Fig. 2: Intra-week ridership for stations in City of London (The Square Mile)",
+    subtitle = "By number of entries into stations",
+    x = "Day of the week",
+    y = "Station entries",
+    color = "Year") +
+  scale_x_discrete(labels = c("Mon", "Tue/Wed/Thu", "Fri", "Sat", "Sun")) +
+  scale_y_continuous(labels = comma) +
+  theme_minimal()
+```
+
+```{r intra_week_wharf}
+summary_long_wharf <- summary_wharf %>%
+  pivot_longer(cols = starts_with("IN_"), 
+               names_to = "day_of_week", 
+               values_to = "value") %>%
+  mutate(day_of_week = factor(day_of_week, 
+                              levels = c("IN_MON", "IN_TUE_TO_THU", "IN_FRI", "IN_SAT", "IN_SUN")))
+
+ggplot(summary_long_wharf, aes(
+  x = day_of_week, 
+  y = value, 
+  color = factor(Year), 
+  group = Year)) +
+  geom_line(size = 1.5) +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("#f18f01", "#0a2239")) +
+  labs(
+    title = "Fig. 3: Intra-week ridership for stations in Canary Wharf",
+    subtitle = "By number of entries into stations",
+    x = "Day of the week",
+    y = "Station entries",
+    color = "Year") +
+  scale_x_discrete(labels = c("Mon", "Tue/Wed/Thu", "Fri", "Sat", "Sun")) +
+  scale_y_continuous(labels = comma) +
+  theme_minimal()
+```
+
+## Finding #3: Rebound in weekend ridership in the City of London indicates a strong recovery in leisure activities
+
+An additional insight from the above two figures lies in the comparison of weekday and weekend travel demand. It is interesting that **for the City of London (traditional CBD), ridership across all days of the week have increased from 2022 to 2023**. By contrast, in Canary Wharf, weekend ridership remained stable over the two years compared to weekdays, which had an increase in ridership from 2022 to 2023. This is **possibly driven by an increase in weekend leisure activities within the City of London**, which could match the increase in workers returning to the office on weekdays. On the other hand, **Canary Wharf remains dominated by office blocks**, and there are limited leisure destinations that could generate leisure trips, particularly on weekends.
+
+## Finding #4: Fridays have become the most popular day for remote working compared to Mondays in 2023
+
+Comparing 2022 and 2023 ridership data across both business districts, Fridays have replaced Mondays as the most popular day for remote working. The R chunk below calculates ridership on Mondays and Fridays as a proportion of travel on Tuesdays/Wednesdays/Thursdays (which serve as the baseline).
+
+```{r calculate_relative_travel}
+summary_sqm <- summary_sqm %>%
+  mutate(
+    mon_over_tt = (IN_MON / IN_TUE_TO_THU) - 1,
+    fri_over_tt = (IN_FRI / IN_TUE_TO_THU) - 1
+  )
+
+summary_wharf <- summary_wharf %>%
+  mutate(
+    mon_over_tt = (IN_MON / IN_TUE_TO_THU) - 1,
+    fri_over_tt = (IN_FRI / IN_TUE_TO_THU) - 1
+  )
+```
+
+Fig. 4 below shows the changes for Mondays and Fridays over 2022-23, by district.
+
+```{r combined_slopes}
+# Reshape data for City of London
+slope_data_sqm <- 
+  summary_sqm %>%
+  select(Year, mon_over_tt, fri_over_tt) %>%
+  pivot_longer(
+    cols = starts_with("mon_over_tt") | starts_with("fri_over_tt"),
+    names_to = "day",
+    values_to = "Percentage_of_Baseline") %>%
+  mutate(year = as.factor(Year))
+
+slope_data_sqm <- slope_data_sqm %>%
+  mutate(variable = recode(day, 
+                           "mon_over_tt" = "Mon", 
+                           "fri_over_tt" = "Fri"))
+
+slope_data_sqm$variable <- as.factor(slope_data_sqm$variable)
+
+# Reshape data for Canary Wharf
+slope_data_wharf <- 
+  summary_wharf %>%
+  select(Year, mon_over_tt, fri_over_tt) %>%
+  pivot_longer(
+    cols = starts_with("mon_over_tt") | starts_with("fri_over_tt"),
+    names_to = "day",
+    values_to = "Percentage_of_Baseline") %>%
+  mutate(year = as.factor(Year))
+
+slope_data_wharf <- slope_data_wharf %>%
+  mutate(variable = recode(day, 
+                           "mon_over_tt" = "Mon", 
+                           "fri_over_tt" = "Fri"))
+
+slope_data_wharf$variable <- as.factor(slope_data_wharf$variable)
+
+# First plot
+p1 <- ggplot(
+  slope_data_sqm, aes(
+    x = Year,
+    y = Percentage_of_Baseline,
+    group = variable,
+    color = variable
+  )) +
+  geom_vline(
+    xintercept = c(2022, 2023), 
+    linetype = "solid", 
+    color = "#ece8ea",
+    size = 1.5) +
+  geom_line(size = 2) +
+  geom_text_repel(
+    data = slope_data_sqm |> filter(Year == 2022),
+    aes(label = paste(variable, round(Percentage_of_Baseline, 3))),
+    size = 4,
+    hjust = 1,
+    direction = "y",
+    nudge_x = -0.3
+  ) +
+  geom_text_repel(
+    data = slope_data_sqm |> filter(Year == 2023),
+    aes(label = paste(variable, round(Percentage_of_Baseline, 3))),
+    size = 4,
+    hjust = 0,
+    direction = "y",
+    nudge_x = 0.3
+  ) +
+  geom_point(size = 3) +
+  labs(title = "City of London") +
+  scale_x_continuous(
+    breaks = c(2022, 2023),
+    limits = c(2021, 2025)
+  ) +
+  scale_y_continuous(limits = c(-0.25, -0.15)) +
+  scale_color_manual(values = c("Mon" = "#9F2042", "Fri" = "#2E86AB")) +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_blank(),
+    axis.title = element_blank(),
+    legend.position = "none",
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.grid.major.x = element_blank(),  
+    panel.grid.minor.x = element_blank()
+  )
+
+# Second plot
+p2 <- ggplot(
+  slope_data_wharf, aes(
+    x = Year,
+    y = Percentage_of_Baseline,
+    group = variable,
+    color = variable
+  )) +
+  geom_vline(
+    xintercept = c(2022, 2023), 
+    linetype = "solid", 
+    color = "#ece8ea",
+    size = 1.5) +
+  geom_line(size = 2) +
+  geom_text_repel(
+    data = slope_data_wharf |> filter(Year == 2022),
+    aes(label = paste(variable, round(Percentage_of_Baseline, 3))),
+    size = 4,
+    hjust = 1,
+    direction = "y",
+    nudge_x = -0.3
+  ) +
+  geom_text_repel(
+    data = slope_data_wharf |> filter(Year == 2023),
+    aes(label = paste(variable, round(Percentage_of_Baseline, 3))),
+    size = 4,
+    hjust = 0,
+    direction = "y",
+    nudge_x = 0.3
+  ) +
+  geom_point(size = 3) +
+  labs(title = "Canary Wharf") +
+  scale_x_continuous(
+    breaks = c(2022, 2023),
+    limits = c(2021, 2025)
+  ) +
+  scale_y_continuous(limits = c(-0.25, -0.15)) +
+  scale_color_manual(values = c("Mon" = "#F18F01", "Fri" = "#0a2239")) +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_blank(),
+    axis.title = element_blank(),
+    legend.position = "none",
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.grid.major.x = element_blank(),  
+    panel.grid.minor.x = element_blank()
+  )
+
+# Arrange plots side by side
+grid.arrange(p1, p2, ncol = 2)
+```
+
+```{r wfh_day_sqm, eval=FALSE}
+ggplot(
+  slope_data_sqm, aes(
+    x = Year,
+    y = Percentage_of_Baseline,
+    group = variable,
+    color = variable
+  )) +
+  geom_vline(
+    xintercept = c(2022, 2023), 
+    linetype = "solid", 
+    color = "#ece8ea",
+    size = 1.5) +
+  geom_line(
+    size = 2
+  ) +
+  geom_text_repel(
+    data = slope_data_sqm |> filter(Year == 2022),
+      aes(label = paste(
+        variable, round(Percentage_of_Baseline, 3)
+      )),
+      size = 4,
+      hjust = 1,
+      direction = "y",
+      nudge_x = -0.3
+  ) +
+  geom_text_repel(
+    data = slope_data_sqm |> filter(Year == 2023),
+      aes(label = paste(
+        variable, round(Percentage_of_Baseline, 3)
+      )),
+      size = 4,
+      hjust = 0,
+      direction = "y",
+      nudge_x = 0.3
+  ) +
+  geom_point(
+    size = 3
+  ) +
+  labs(
+    title = "Fig. 4: Mon & Fri ridership relative to baseline (Tue/Wed/Thu)",
+    subtitle = "City of London, 2022-23"
+  ) +
+  scale_x_continuous(
+    breaks = c(2022, 2023),
+    limits = c(2021, 2025)
+  ) +
+  scale_y_continuous(limits = c(-0.25, -0.21)) +
+  scale_color_manual(values = c("Mon" = "#9F2042", "Fri" = "#2E86AB")) +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_blank(),
+    axis.title = element_blank(),
+    legend.position = "none",
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.grid.major.x = element_blank(),  
+    panel.grid.minor.x = element_blank()
+  )
+```
+
+```{r wfh_day_wharf, eval=FALSE}
+ggplot(
+  slope_data_wharf, aes(
+    x = Year,
+    y = Percentage_of_Baseline,
+    group = variable,
+    color = variable
+  )) +
+  geom_vline(
+    xintercept = c(2022, 2023), 
+    linetype = "solid", 
+    color = "#ece8ea",
+    size = 1.5) +
+  geom_line(
+    size = 2
+  ) +
+  geom_text_repel(
+    data = slope_data_wharf |> filter(Year == 2022),
+      aes(label = paste(
+        variable, round(Percentage_of_Baseline, 3)
+      )),
+      size = 4,
+      hjust = 1,
+      direction = "y",
+      nudge_x = -0.3
+  ) +
+  geom_text_repel(
+    data = slope_data_wharf |> filter(Year == 2023),
+      aes(label = paste(
+        variable, round(Percentage_of_Baseline, 3)
+      )),
+      size = 4,
+      hjust = 0,
+      direction = "y",
+      nudge_x = 0.3
+  ) +
+  geom_point(
+    size = 3
+  ) +
+  labs(
+    title = "Fig. 5: Mon & Fri ridership relative to baseline (Tue/Wed/Thu)",
+    subtitle = "Canary Wharf, 2022-23"
+  ) +
+  scale_x_continuous(
+    breaks = c(2022, 2023),
+    limits = c(2021, 2025)
+  ) +
+  scale_y_continuous(limits = c(-0.20, -0.15)) +
+  scale_color_manual(values = c("Mon" = "#F18F01", "Fri" = "#0a2239")) +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_blank(),
+    axis.title = element_blank(),
+    legend.position = "none",
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.grid.major.x = element_blank(),  
+    panel.grid.minor.x = element_blank()
+  )
+```
+
+## Finding #5: Remote working is less prevalent in Canary Wharf compared to the City.
+
+From the figure above, one can also see that there is **much less heterogeneity in ridership across weekdays in Canary Wharf compared to the City of London**, with Mondays and Fridays being closer in magnitude to that of other weekdays. In fact, from 2022-23, ridership on both Mondays and Fridays have increased relative to Tue/Wed/Thu in Canary Wharf, while ridership on Fridays in the City of London has actually decreased relative to Tue/Wed/Thu.
+
+This may be driven by the **composition of industries located in Canary Wharf**, namely financial services and insurance companies, which may demand greater in-person availability compared to other sectors.
+
+## For Homework 3
+
+```{r}
+summary_sqm <- summary_sqm %>%
+  mutate(
+    pct_mon = paste0(round((1 + mon_over_tt) * 100, 1), "%"),
+    pct_fri = paste0(round((1 + fri_over_tt) * 100, 1), "%")
+  )
+
+summary_wharf <- summary_wharf %>%
+  mutate(
+    pct_mon = paste0(round((1 + mon_over_tt) * 100, 1), "%"),
+    pct_fri = paste0(round((1 + fri_over_tt) * 100, 1), "%")
+  )
+```
+
+## References
