@@ -1,0 +1,29 @@
+---
+title: "London in Transition: The Changing Patterns of Tube Travel in Central London"
+author: "Byron Huang"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: united
+    toc: true
+    toc_float: true
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  results = 'hide',
+  message = FALSE,
+  warning = FALSE,
+  fig.align = 'left')
+
+library(tidyverse)
+library(kableExtra)
+library(scales)
+
+```
+
+<br>
+
+![](images/cover-image-byron-01.png)
